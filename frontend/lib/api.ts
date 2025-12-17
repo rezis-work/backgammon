@@ -76,8 +76,8 @@ export const friendsApi = {
 
 // Games
 export const gamesApi = {
-  invite: async (friend_id: string) => {
-    const response = await api.post('/games/invite', { friend_id });
+  invite: async (friend_id: string, game_type: 'backgammon' | 'dice' = 'backgammon') => {
+    const response = await api.post('/games/invite', { friend_id, game_type });
     return response.data;
   },
   getInvites: async () => {

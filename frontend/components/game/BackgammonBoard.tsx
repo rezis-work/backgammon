@@ -87,22 +87,28 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
     }
 
     const valid = new Set<number | 'off'>();
-    const homeStart = playerNumber === 1 ? 18 : 0;
-    const homeEnd = playerNumber === 1 ? 23 : 5;
-    const direction = playerNumber === 1 ? -1 : 1;
+    // Both players' home board: indices 0-5 (bottom left - gate)
+    const homeStart = 0;
+    const homeEnd = 5;
+    // Both players move towards lower indices (decreasing)
+    const direction = -1;
 
     if (from === 'bar') {
-      // Valid entry points from bar
-      const entryStart = playerNumber === 1 ? 0 : 18;
-      const entryEnd = playerNumber === 1 ? 5 : 23;
+      // Valid entry points from bar - both players enter on points 18-23 (indices 17-22)
+      const entryStart = 18;
+      const entryEnd = 23;
       
       for (let i = entryStart; i <= entryEnd; i++) {
-        const entryPoint = playerNumber === 1 ? (i + 1) : (24 - i);
+        // Entry point: from 24 (index 23) backwards by dice value
+        const expectedEntry0 = 24 - dice[0];
+        const expectedIndex0 = expectedEntry0 - 1;
+        const expectedEntry1 = 24 - dice[1];
+        const expectedIndex1 = expectedEntry1 - 1;
         const opponent = playerNumber === 1 ? 2 : 1;
         
         if (board.points[i][opponent - 1] <= 1) {
-          if (!usedDice[0] && entryPoint === dice[0]) valid.add(i);
-          if (!usedDice[1] && entryPoint === dice[1]) valid.add(i);
+          if (!usedDice[0] && i === expectedIndex0) valid.add(i);
+          if (!usedDice[1] && i === expectedIndex1) valid.add(i);
         }
       }
     } else if (typeof from === 'number') {
@@ -120,11 +126,11 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
         allInHome = false;
       }
 
-      // Regular moves
+      // Regular moves - both players move towards lower indices
       for (let dieIndex = 0; dieIndex < 2; dieIndex++) {
         if (usedDice[dieIndex]) continue;
         
-        const to = from + (dice[dieIndex] * direction);
+        const to = from + (dice[dieIndex] * direction); // Move towards lower indices
         if (to >= 0 && to < 24) {
           const opponent = playerNumber === 1 ? 2 : 1;
           if (board.points[to][opponent - 1] <= 1) {
@@ -135,7 +141,8 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
 
       // Bearing off
       if (allInHome && from >= homeStart && from <= homeEnd) {
-        const pointNumber = playerNumber === 1 ? (24 - from) : (from + 1);
+        // Both players: point number = index + 1
+        const pointNumber = from + 1;
         
         for (let dieIndex = 0; dieIndex < 2; dieIndex++) {
           if (usedDice[dieIndex]) continue;
@@ -143,11 +150,9 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
           if (pointNumber === dice[dieIndex]) {
             valid.add('off');
           } else if (pointNumber < dice[dieIndex]) {
-            // Check if no checkers on higher points
+            // Check if no checkers on higher points (higher indices = higher point numbers)
             let canBearOff = true;
-            for (let i = (playerNumber === 1 ? from + 1 : from - 1); 
-                 (playerNumber === 1 ? i <= homeEnd : i >= homeStart); 
-                 (playerNumber === 1 ? i++ : i--)) {
+            for (let i = from + 1; i <= homeEnd; i++) {
               if (board.points[i][playerNumber - 1] > 0) {
                 canBearOff = false;
                 break;
@@ -172,9 +177,18 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
         setSelectedPoint(pointIndex);
         calculateValidDestinations(pointIndex);
       }
+    } else if (selectedPoint === pointIndex) {
+      // Clicking the same point - unselect it
+      setSelectedPoint(null);
+      setValidDestinations(new Set());
     } else {
-      // Move to destination
-      if (validDestinations.has(pointIndex)) {
+      // Check if clicking on another point with checkers - select that instead
+      const checkers = board?.points[pointIndex][playerNumber - 1] || 0;
+      if (checkers > 0) {
+        setSelectedPoint(pointIndex);
+        calculateValidDestinations(pointIndex);
+      } else if (validDestinations.has(pointIndex)) {
+        // Move to destination
         const move: SocketGameMove = {
           game_id: gameId,
           from: selectedPoint,
@@ -191,11 +205,28 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
   };
 
   const handleBarClick = () => {
-    if (!canMove || !dice || selectedPoint !== null) return;
+    if (!canMove || !dice) return;
+    
+    // If bar is already selected, unselect it
+    if (selectedPoint === 'bar') {
+      setSelectedPoint(null);
+      setValidDestinations(new Set());
+      return;
+    }
+    
+    // If another point is selected, allow switching to bar
     const barCheckers = board?.bar[playerNumber === 1 ? 'player1' : 'player2'] || 0;
     if (barCheckers > 0) {
       setSelectedPoint('bar');
       calculateValidDestinations('bar');
+    }
+  };
+
+  const handleLeaveGame = () => {
+    if (confirm('Are you sure you want to leave the game? Your opponent will win and receive 20 points.')) {
+      const socket = getSocket();
+      socket.disconnect();
+      window.location.href = '/profile';
     }
   };
 
@@ -263,17 +294,20 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
 
   const isMyTurn = currentPlayer === playerNumber;
 
-  // Backgammon board layout:
-  // Top row: Points 13-18 (right to left), then 7-12 (right to left)
-  // Bottom row: Points 19-24 (left to right), then 1-6 (left to right)
+  // Backgammon board layout (standard):
+  // Top row: Top left (indices 6-11, left to right), then Top right (indices 12-17, left to right)
+  // Bottom row: Bottom left HOME (indices 5-0, left to right), then Bottom right (indices 18-23, left to right)
+  // Gate (home board): Points 1-6 (indices 0-5) at bottom left
+  // Movement: Top row moves left (towards home), bottom row moves right (towards home)
   
   const renderPoint = (pointIndex: number, isTop: boolean, pointNumber: number) => {
     const point = board.points[pointIndex];
     const player1Checkers = point[0];
     const player2Checkers = point[1];
     const isSelected = selectedPoint === pointIndex;
-    const homeStart = playerNumber === 1 ? 18 : 0;
-    const homeEnd = playerNumber === 1 ? 23 : 5;
+    // Both players' home board: indices 0-5 (bottom left - gate)
+    const homeStart = 0;
+    const homeEnd = 5;
     const isHome = pointIndex >= homeStart && pointIndex <= homeEnd;
     const isValidDestination = validDestinations.has(pointIndex);
     const canBearingOff = isHome && selectedPoint !== null && validDestinations.has('off');
@@ -302,11 +336,17 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
         onClick={() => {
           if (!canMove) return;
           
-          if (canBearingOff && pointIndex === selectedPoint) {
+          // If this point is selected, allow unselecting or bearing off
+          if (isSelected) {
+            if (canBearingOff && validDestinations.has('off')) {
+              handleBearingOff(pointIndex);
+            } else {
+              // Unselect by clicking the same point
+              handlePointClick(pointIndex);
+            }
+          } else if (canBearingOff && pointIndex === selectedPoint) {
             handleBearingOff(pointIndex);
-          } else if (canSelect) {
-            handlePointClick(pointIndex);
-          } else if (isValidDestination) {
+          } else if (canSelect || isValidDestination) {
             handlePointClick(pointIndex);
           }
         }}
@@ -411,6 +451,14 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
                   </Button>
                 )
               )}
+              <Button
+                onClick={handleLeaveGame}
+                variant="outline"
+                size="lg"
+                className="border-red-300 text-red-600 hover:bg-red-50 hover:border-red-400"
+              >
+                🚪 Leave Game
+              </Button>
             </div>
           </div>
         </div>
@@ -442,7 +490,7 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
                     <div
                       key={i}
                       className={`w-8 h-8 rounded-full bg-gradient-to-br from-gray-800 to-black border-2 border-gray-600 shadow-md transition-transform ${
-                        canMove && selectedPoint === null && playerNumber === 2
+                        canMove && playerNumber === 2
                           ? 'cursor-pointer hover:scale-110'
                           : 'cursor-not-allowed opacity-50'
                       }`}
@@ -459,9 +507,9 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
         <div className="bg-gradient-to-br from-amber-600 to-amber-800 rounded-2xl shadow-2xl p-4 border-8 border-amber-900">
           {/* Top half of board */}
           <div className="flex gap-2 mb-2">
-            {/* Right quadrant - Points 13-18 (displayed right to left) */}
+            {/* Left quadrant - Top left (indices 6-11, displayed left to right) */}
             <div className="flex-1 flex gap-1">
-              {[17, 16, 15, 14, 13, 12].map((i) => renderPoint(i, true, i + 1))}
+              {[6, 7, 8, 9, 10, 11].map((i) => renderPoint(i, true, i + 1))}
             </div>
             
             {/* Center bar / Borne off area */}
@@ -473,25 +521,25 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
               </div>
             </div>
             
-            {/* Left quadrant - Points 7-12 (displayed right to left) */}
+            {/* Right quadrant - Top right (indices 12-17, displayed left to right) */}
             <div className="flex-1 flex gap-1">
-              {[11, 10, 9, 8, 7, 6].map((i) => renderPoint(i, true, i + 1))}
+              {[12, 13, 14, 15, 16, 17].map((i) => renderPoint(i, true, i + 1))}
             </div>
           </div>
 
           {/* Bottom half of board */}
           <div className="flex gap-2">
-            {/* Left quadrant - Points 19-24 (displayed left to right) */}
+            {/* Left quadrant - Bottom left HOME (indices 5-0, displayed left to right) - GATE/HOME BOARD */}
             <div className="flex-1 flex gap-1">
-              {[18, 19, 20, 21, 22, 23].map((i) => renderPoint(i, false, i + 1))}
+              {[5, 4, 3, 2, 1, 0].map((i) => renderPoint(i, false, i + 1))}
             </div>
             
             {/* Center bar / Empty space */}
             <div className="w-24"></div>
             
-            {/* Right quadrant - Points 1-6 (displayed left to right) */}
+            {/* Right quadrant - Bottom right (indices 18-23, displayed left to right) */}
             <div className="flex-1 flex gap-1">
-              {[0, 1, 2, 3, 4, 5].map((i) => renderPoint(i, false, i + 1))}
+              {[18, 19, 20, 21, 22, 23].map((i) => renderPoint(i, false, i + 1))}
             </div>
           </div>
         </div>
@@ -500,7 +548,7 @@ export default function BackgammonBoard({ gameId, userId, playerNumber }: Backga
         {selectedPoint && (
           <div className="mt-4 text-center">
             <div className="inline-block bg-blue-500 text-white px-6 py-3 rounded-lg shadow-lg text-lg font-semibold">
-              Selected: {selectedPoint === 'bar' ? 'Bar' : `Point ${selectedPoint + 1}`} - Click a green highlighted destination
+              Selected: {selectedPoint === 'bar' ? 'Bar' : `Point ${selectedPoint + 1}`} - Click a green highlighted destination or click again to unselect
             </div>
           </div>
         )}

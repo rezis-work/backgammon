@@ -100,7 +100,7 @@ export default function ProfilePage() {
               {gameInvites.map((invite) => (
                 <div key={invite.id} className="flex items-center justify-between p-3 border rounded">
                   <div>
-                    <p className="font-medium">{invite.player1.username} invited you to play</p>
+                    <p className="font-medium">{invite.player1.username} invited you to play {invite.game_type === 'dice' ? 'Dice' : 'Backgammon'}</p>
                     <p className="text-sm text-gray-500">Click Accept to start the game</p>
                   </div>
                   <div className="flex gap-2">

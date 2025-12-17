@@ -21,6 +21,7 @@ export interface Game {
   id: string;
   player1_id: string;
   player2_id: string;
+  game_type?: 'backgammon' | 'dice';
   status: 'pending' | 'active' | 'completed';
   winner_id: string | null;
   points_awarded: number;
@@ -61,6 +62,23 @@ export interface SocketGameMove {
   game_id: string;
   from: number | 'bar';
   to: number | 'off';
+  player_id: string;
+}
+
+export interface DiceGameState {
+  game_id: string;
+  player1_score: number;
+  player2_score: number;
+  current_round: number;
+  player1_roll: number | null;
+  player2_roll: number | null;
+  current_player: 1 | 2;
+  round_winner: 0 | 1 | 2 | null; // 0 = tie, 1 = player1, 2 = player2, null = round not finished
+  game_winner: 1 | 2 | null;
+}
+
+export interface SocketDiceRoll {
+  game_id: string;
   player_id: string;
 }
 

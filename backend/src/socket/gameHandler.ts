@@ -5,15 +5,20 @@ import { games, users, game_moves } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import {
   initializeBoard,
-  rollDice,
+  rollDice as rollBackgammonDice,
   isValidMove,
   makeMove,
   checkWinCondition,
   canPlayerMove,
 } from '../services/gameService.js';
-import type { BackgammonBoard, SocketGameMove } from '../../../shared/src/types.js';
+import {
+  initializeDiceGame,
+  rollDice as rollSingleDice,
+  processDiceRoll,
+} from '../services/diceGameService.js';
+import type { BackgammonBoard, SocketGameMove, DiceGameState } from '../../../shared/src/types.js';
 
-interface GameRoom {
+interface BackgammonGameRoom {
   gameId: string;
   board: BackgammonBoard;
   player1Id: string;
@@ -23,7 +28,15 @@ interface GameRoom {
   diceUsed: boolean[];
 }
 
-const gameRooms = new Map<string, GameRoom>();
+interface DiceGameRoom {
+  gameId: string;
+  gameState: DiceGameState;
+  player1Id: string;
+  player2Id: string;
+}
+
+const backgammonRooms = new Map<string, BackgammonGameRoom>();
+const diceRooms = new Map<string, DiceGameRoom>();
 // Track which socket is in which game
 const socketToGame = new Map<string, string>();
 
@@ -81,32 +94,56 @@ export function setupSocketIO(io: Server) {
         // Track this socket's game
         socketToGame.set(socket.id, gameId);
 
-        // Initialize or get game room
-        if (!gameRooms.has(gameId)) {
-          const board = initializeBoard();
-          board.game_id = gameId;
-          board.current_player = 1;
+        const gameType = game.game_type || 'backgammon';
 
-          gameRooms.set(gameId, {
-            gameId,
-            board,
-            player1Id: game.player1_id,
-            player2Id: game.player2_id,
-            currentPlayer: 1,
-            dice: null,
-            diceUsed: [],
+        if (gameType === 'dice') {
+          // Initialize or get dice game room
+          if (!diceRooms.has(gameId)) {
+            const gameState = initializeDiceGame(gameId);
+            diceRooms.set(gameId, {
+              gameId,
+              gameState,
+              player1Id: game.player1_id,
+              player2Id: game.player2_id,
+            });
+          }
+
+          const room = diceRooms.get(gameId)!;
+          const playerNumber = game.player1_id === userId ? 1 : 2;
+          
+          // Emit current game state
+          socket.emit('dice-game-state', {
+            gameState: room.gameState,
+            canRoll: room.gameState.current_player === playerNumber && room.gameState.game_winner === null,
+          });
+        } else {
+          // Initialize or get backgammon game room
+          if (!backgammonRooms.has(gameId)) {
+            const board = initializeBoard();
+            board.game_id = gameId;
+            board.current_player = 1;
+
+            backgammonRooms.set(gameId, {
+              gameId,
+              board,
+              player1Id: game.player1_id,
+              player2Id: game.player2_id,
+              currentPlayer: 1,
+              dice: null,
+              diceUsed: [],
+            });
+          }
+
+          const room = backgammonRooms.get(gameId)!;
+          
+          // Emit current game state
+          socket.emit('game-state', {
+            board: room.board,
+            currentPlayer: room.currentPlayer,
+            dice: room.dice,
+            canMove: room.currentPlayer === (game.player1_id === userId ? 1 : 2),
           });
         }
-
-        const room = gameRooms.get(gameId)!;
-        
-        // Emit current game state
-        socket.emit('game-state', {
-          board: room.board,
-          currentPlayer: room.currentPlayer,
-          dice: room.dice,
-          canMove: room.currentPlayer === (game.player1_id === userId ? 1 : 2),
-        });
 
         // Notify other player
         socket.to(`game:${gameId}`).emit('player-joined', { userId });
@@ -118,51 +155,155 @@ export function setupSocketIO(io: Server) {
 
     socket.on('roll-dice', async (gameId: string) => {
       try {
-        const room = gameRooms.get(gameId);
-        if (!room) {
-          socket.emit('error', { message: 'Game room not found' });
+        const [game] = await db
+          .select()
+          .from(games)
+          .where(eq(games.id, gameId))
+          .limit(1);
+
+        if (!game) {
+          socket.emit('error', { message: 'Game not found' });
           return;
         }
 
-        const playerNumber = room.player1Id === userId ? 1 : 2;
-        if (room.currentPlayer !== playerNumber) {
-          socket.emit('error', { message: 'Not your turn' });
-          return;
-        }
+        const gameType = game.game_type || 'backgammon';
 
-        if (room.dice) {
-          socket.emit('error', { message: 'Dice already rolled' });
-          return;
-        }
+        if (gameType === 'dice') {
+          const room = diceRooms.get(gameId);
+          if (!room) {
+            socket.emit('error', { message: 'Game room not found' });
+            return;
+          }
 
-        const dice = rollDice();
-        room.dice = dice;
-        room.diceUsed = [false, false];
+          const playerNumber = room.player1Id === userId ? 1 : 2;
+          if (room.gameState.current_player !== playerNumber) {
+            socket.emit('error', { message: 'Not your turn' });
+            return;
+          }
 
-        // Save dice roll to database
-        await db.insert(game_moves).values({
-          game_id: gameId,
-          player_id: userId,
-          move_data: { type: 'roll', dice },
-          move_number: 0,
-        });
+          if (room.gameState.game_winner !== null) {
+            socket.emit('error', { message: 'Game is over' });
+            return;
+          }
 
-        // Emit dice roll to all players, but only the current player can move
-        const sockets = await io.in(`game:${gameId}`).fetchSockets();
-        
-        for (const socket of sockets) {
-          const socketUserId = (socket as any).userId;
-          const socketPlayerNumber = room.player1Id === socketUserId ? 1 : 2;
-          const socketCanMove = room.currentPlayer === socketPlayerNumber;
-          
-          socket.emit('dice-rolled', { dice, player: playerNumber });
-          socket.emit('game-state', {
-            board: room.board,
-            currentPlayer: room.currentPlayer,
-            dice: room.dice,
-            canMove: socketCanMove,
-            usedDice: room.diceUsed,
+          // Check if player already rolled this round
+          if ((playerNumber === 1 && room.gameState.player1_roll !== null) ||
+              (playerNumber === 2 && room.gameState.player2_roll !== null)) {
+            socket.emit('error', { message: 'You already rolled this round' });
+            return;
+          }
+
+          const roll = rollSingleDice();
+          room.gameState = processDiceRoll(room.gameState, playerNumber, roll);
+
+          // Save roll to database
+          await db.insert(game_moves).values({
+            game_id: gameId,
+            player_id: userId,
+            move_data: { type: 'dice-roll', roll, player: playerNumber, round: room.gameState.current_round },
+            move_number: room.gameState.current_round,
           });
+
+          // Check if game is won
+          if (room.gameState.game_winner !== null) {
+            const winnerId = room.gameState.game_winner === 1 ? room.player1Id : room.player2Id;
+            
+            // Update game in database
+            await db.update(games).set({
+              status: 'completed',
+              winner_id: winnerId,
+              points_awarded: 10,
+              completed_at: new Date(),
+              updated_at: new Date(),
+            }).where(eq(games.id, gameId));
+
+            // Update winner's points
+            const [winner] = await db
+              .select()
+              .from(users)
+              .where(eq(users.id, winnerId))
+              .limit(1);
+            
+            if (winner) {
+              await db
+                .update(users)
+                .set({
+                  points: winner.points + 10,
+                  updated_at: new Date(),
+                })
+                .where(eq(users.id, winnerId));
+            }
+
+            io.to(`game:${gameId}`).emit('dice-game-over', {
+              winner: room.gameState.game_winner,
+              winnerId,
+              gameState: room.gameState,
+            });
+
+            diceRooms.delete(gameId);
+          } else {
+            // Emit updated game state to all players
+            const sockets = await io.in(`game:${gameId}`).fetchSockets();
+            
+            for (const socket of sockets) {
+              const socketUserId = (socket as any).userId;
+              const socketPlayerNumber = room.player1Id === socketUserId ? 1 : 2;
+              
+              socket.emit('dice-rolled', { roll, player: playerNumber, round: room.gameState.current_round });
+              socket.emit('dice-game-state', {
+                gameState: room.gameState,
+                canRoll: room.gameState.current_player === socketPlayerNumber,
+              });
+            }
+          }
+        } else {
+          // Backgammon dice roll
+          const room = backgammonRooms.get(gameId);
+          if (!room) {
+            socket.emit('error', { message: 'Game room not found' });
+            return;
+          }
+
+          const playerNumber = room.player1Id === userId ? 1 : 2;
+          if (room.currentPlayer !== playerNumber) {
+            socket.emit('error', { message: 'Not your turn' });
+            return;
+          }
+
+          if (room.dice) {
+            socket.emit('error', { message: 'Dice already rolled' });
+            return;
+          }
+
+          const dice = rollBackgammonDice();
+          room.dice = dice;
+          room.diceUsed = [false, false];
+
+          // Save dice roll to database
+          await db.insert(game_moves).values({
+            game_id: gameId,
+            player_id: userId,
+            move_data: { type: 'roll', dice },
+            move_number: 0,
+          });
+
+          // Emit dice roll to all players, but only the current player can move
+          const sockets = await io.in(`game:${gameId}`).fetchSockets();
+          
+          for (const socket of sockets) {
+            const socketUserId = (socket as any).userId;
+            const socketPlayerNumber = room.player1Id === socketUserId ? 1 : 2;
+            const socketCanMove = room.currentPlayer === socketPlayerNumber;
+            
+            socket.emit('dice-rolled', { dice, player: playerNumber });
+            socket.emit('game-state', {
+              board: room.board,
+              currentPlayer: room.currentPlayer,
+              dice: room.dice,
+              canMove: socketCanMove,
+              usedDice: room.diceUsed,
+            });
+          }
         }
       } catch (error) {
         console.error('Roll dice error:', error);
@@ -172,7 +313,18 @@ export function setupSocketIO(io: Server) {
 
     socket.on('make-move', async (move: SocketGameMove) => {
       try {
-        const room = gameRooms.get(move.game_id);
+        const [game] = await db
+          .select()
+          .from(games)
+          .where(eq(games.id, move.game_id))
+          .limit(1);
+
+        if (!game || (game.game_type || 'backgammon') !== 'backgammon') {
+          socket.emit('error', { message: 'Invalid game type for this action' });
+          return;
+        }
+
+        const room = backgammonRooms.get(move.game_id);
         if (!room) {
           socket.emit('error', { message: 'Game room not found' });
           return;
@@ -194,18 +346,22 @@ export function setupSocketIO(io: Server) {
         let diceValue = 0;
         
         if (move.from === 'bar' && typeof move.to === 'number') {
-          // Entering from bar
-          const entryPoint = playerNumber === 1 ? (move.to + 1) : (24 - move.to);
-          if (entryPoint === room.dice![0] && !room.diceUsed[0]) {
+          // Entering from bar - both players enter from point 24 (index 23) backwards by dice value
+          const expectedEntry = 24 - room.dice![0]; // Point number
+          const expectedIndex0 = expectedEntry - 1; // Convert to index
+          const expectedEntry1 = 24 - room.dice![1]; // Point number
+          const expectedIndex1 = expectedEntry1 - 1; // Convert to index
+          
+          if (move.to === expectedIndex0 && !room.diceUsed[0]) {
             dieUsed = 0;
             diceValue = room.dice![0];
-          } else if (entryPoint === room.dice![1] && !room.diceUsed[1]) {
+          } else if (move.to === expectedIndex1 && !room.diceUsed[1]) {
             dieUsed = 1;
             diceValue = room.dice![1];
           }
         } else if (move.to === 'off' && typeof move.from === 'number') {
-          // Bearing off
-          const pointNumber = playerNumber === 1 ? (24 - move.from) : (move.from + 1);
+          // Bearing off - both players: point number = index + 1
+          const pointNumber = move.from + 1;
           if (pointNumber === room.dice![0] && !room.diceUsed[0]) {
             dieUsed = 0;
             diceValue = room.dice![0];
@@ -216,13 +372,11 @@ export function setupSocketIO(io: Server) {
             // Check if bearing off with higher die (when no checkers on higher points)
             const higherDie = room.dice![0] > room.dice![1] ? 0 : 1;
             if (!room.diceUsed[higherDie] && pointNumber < room.dice![higherDie]) {
-              // Verify no checkers on higher points
-              const homeStart = playerNumber === 1 ? 18 : 0;
-              const homeEnd = playerNumber === 1 ? 23 : 5;
+              // Verify no checkers on higher points (higher indices = higher point numbers)
+              const homeStart = 0;
+              const homeEnd = 5;
               let canBearOff = true;
-              for (let i = (playerNumber === 1 ? move.from + 1 : move.from - 1); 
-                   (playerNumber === 1 ? i <= homeEnd : i >= homeStart); 
-                   (playerNumber === 1 ? i++ : i--)) {
+              for (let i = move.from + 1; i <= homeEnd; i++) {
                 if (room.board.points[i][playerNumber - 1] > 0) {
                   canBearOff = false;
                   break;
@@ -235,8 +389,8 @@ export function setupSocketIO(io: Server) {
             }
           }
         } else if (typeof move.from === 'number' && typeof move.to === 'number') {
-          // Regular move
-          const distance = Math.abs(move.to - move.from);
+          // Regular move - both players move towards lower indices
+          const distance = move.from - move.to; // Always positive since to < from
           if (distance === room.dice![0] && !room.diceUsed[0]) {
             dieUsed = 0;
             diceValue = room.dice![0];
@@ -350,34 +504,52 @@ export function setupSocketIO(io: Server) {
         const gameId = socketToGame.get(socket.id);
         if (!gameId) return;
 
-        const room = gameRooms.get(gameId);
-        if (!room) {
-          socketToGame.delete(socket.id);
-          return;
-        }
-
-        // Check if game is still active
         const [game] = await db
           .select()
           .from(games)
           .where(eq(games.id, gameId))
           .limit(1);
 
+        if (!game) {
+          socketToGame.delete(socket.id);
+          return;
+        }
+
+        const gameType = game.game_type || 'backgammon';
+        let room: BackgammonGameRoom | DiceGameRoom | undefined;
+        
+        if (gameType === 'dice') {
+          room = diceRooms.get(gameId);
+        } else {
+          room = backgammonRooms.get(gameId);
+        }
+
+        if (!room) {
+          socketToGame.delete(socket.id);
+          return;
+        }
+
+        // Check if game is still active
         if (!game || game.status !== 'active') {
           socketToGame.delete(socket.id);
           return;
         }
 
         // Determine which player disconnected
-        const disconnectedPlayerNumber = room.player1Id === userId ? 1 : 2;
+        const disconnectedPlayerNumber = (gameType === 'dice' 
+          ? (room as DiceGameRoom).player1Id === userId ? 1 : 2
+          : (room as BackgammonGameRoom).player1Id === userId ? 1 : 2);
         const winnerNumber = disconnectedPlayerNumber === 1 ? 2 : 1;
-        const winnerId = winnerNumber === 1 ? room.player1Id : room.player2Id;
+        const winnerId = winnerNumber === 1 
+          ? (gameType === 'dice' ? (room as DiceGameRoom).player1Id : (room as BackgammonGameRoom).player1Id)
+          : (gameType === 'dice' ? (room as DiceGameRoom).player2Id : (room as BackgammonGameRoom).player2Id);
 
         // Update game in database - player left, opponent wins
+        const pointsAwarded = gameType === 'dice' ? 10 : 20;
         await db.update(games).set({
           status: 'completed',
           winner_id: winnerId,
-          points_awarded: 20, // 20 points for opponent leaving
+          points_awarded: pointsAwarded,
           completed_at: new Date(),
           updated_at: new Date(),
         }).where(eq(games.id, gameId));
@@ -393,22 +565,32 @@ export function setupSocketIO(io: Server) {
           await db
             .update(users)
             .set({
-              points: winner.points + 20,
+              points: winner.points + pointsAwarded,
               updated_at: new Date(),
             })
             .where(eq(users.id, winnerId));
         }
 
         // Notify remaining player
-        io.to(`game:${gameId}`).emit('game-over', {
-          winner: winnerNumber,
-          winnerId,
-          board: room.board,
-          reason: 'opponent_left',
-        });
+        if (gameType === 'dice') {
+          io.to(`game:${gameId}`).emit('dice-game-over', {
+            winner: winnerNumber,
+            winnerId,
+            gameState: (room as DiceGameRoom).gameState,
+            reason: 'opponent_left',
+          });
+        } else {
+          io.to(`game:${gameId}`).emit('game-over', {
+            winner: winnerNumber,
+            winnerId,
+            board: (room as BackgammonGameRoom).board,
+            reason: 'opponent_left',
+          });
+        }
 
         // Clean up
-        gameRooms.delete(gameId);
+        backgammonRooms.delete(gameId);
+        diceRooms.delete(gameId);
         socketToGame.delete(socket.id);
       } catch (error) {
         console.error('Disconnect handler error:', error);

@@ -2,32 +2,37 @@ import type { BackgammonBoard } from '../../../shared/src/types.js';
 
 export function initializeBoard(): BackgammonBoard {
   // Standard Backgammon starting position
-  // Points are indexed 0-23, where:
-  // - Point 1 (index 0) is bottom right
-  // - Point 24 (index 23) is top right
-  // Player 1 (white) moves from 24→1 (counterclockwise)
-  // Player 2 (black) moves from 1→24 (clockwise)
+  // Home board (gate) for both players: indices 0-5 (bottom left)
+  // Board layout:
+  //   Top row: indices 6-11 (left), 12-17 (right) - displayed left to right
+  //   Bottom row: indices 23-18 (right), 5-0 (left/HOME) - displayed right to left
+  // Movement: Top row moves left, bottom row moves right (both towards home at bottom left)
   const points: number[][] = Array(24).fill(null).map(() => [0, 0]);
   
-  // Player 1 (white) starting position:
-  // - 2 checkers on point 24 (index 23)
-  // - 5 checkers on point 13 (index 12)
-  // - 3 checkers on point 8 (index 7)
-  // - 5 checkers on point 6 (index 5)
-  points[23] = [2, 0];  // Point 24
-  points[12] = [5, 0]; // Point 13
-  points[7] = [3, 0];  // Point 8
-  points[5] = [5, 0];  // Point 6
+  // Based on standard backgammon starting position:
+  // Top left quadrant (indices 6-11, displayed left to right):
+  //   - Index 6 (first point): 5 black checkers
+  //   - Index 8 (third point): 3 white checkers
+  points[6] = [0, 5];  // Top left, first point - 5 black
+  points[8] = [3, 0];  // Top left, third point - 3 white
 
-  // Player 2 (black) starting position:
-  // - 2 checkers on point 1 (index 0)
-  // - 5 checkers on point 12 (index 11)
-  // - 3 checkers on point 17 (index 16)
-  // - 5 checkers on point 19 (index 18)
-  points[0] = [0, 2];  // Point 1
-  points[11] = [0, 5]; // Point 12
-  points[16] = [0, 3]; // Point 17
-  points[18] = [0, 5]; // Point 19
+  // Top right quadrant (indices 12-17, displayed left to right):
+  //   - Index 12 (first point): 5 white checkers
+  //   - Index 17 (last point): 2 black checkers
+  points[12] = [5, 0]; // Top right, first point - 5 white
+  points[17] = [0, 2]; // Top right, last point - 2 black
+
+  // Bottom left quadrant (indices 5-0, HOME, displayed right to left):
+  //   - Index 5 (first point when displayed): 5 white checkers
+  //   - Index 3 (third point when displayed): 3 black checkers
+  points[5] = [5, 0];  // Bottom left, first point - 5 white
+  points[3] = [0, 3];  // Bottom left, third point - 3 black
+
+  // Bottom right quadrant (indices 18-23, displayed left to right):
+  //   - Index 18 (leftmost): 5 black checkers
+  //   - Index 23 (rightmost): 2 white checkers
+  points[18] = [0, 5]; // Bottom right, leftmost point - 5 black
+  points[23] = [2, 0]; // Bottom right, rightmost point - 2 white
 
   return {
     points,
@@ -47,19 +52,15 @@ export function rollDice(): [number, number] {
 
 // Check if a point is in player's home board
 function isInHomeBoard(pointIndex: number, player: 1 | 2): boolean {
-  // Player 1's home: points 18-23 (indices 17-22)
-  // Player 2's home: points 0-5 (indices 0-5)
-  if (player === 1) {
-    return pointIndex >= 18 && pointIndex <= 23;
-  } else {
-    return pointIndex >= 0 && pointIndex <= 5;
-  }
+  // Both players' home board (gate): points 1-6 (indices 0-5) - bottom left
+  return pointIndex >= 0 && pointIndex <= 5;
 }
 
 // Check if all checkers are in home board
 function allInHomeBoard(board: BackgammonBoard, player: 1 | 2): boolean {
-  const homeStart = player === 1 ? 18 : 0;
-  const homeEnd = player === 1 ? 23 : 5;
+  // Both players' home board: indices 0-5
+  const homeStart = 0;
+  const homeEnd = 5;
   
   // Check outer board and bar
   for (let i = 0; i < 24; i++) {
@@ -82,11 +83,10 @@ export function isValidMove(
   if (from === 'bar') {
     if (typeof to !== 'number') return false;
     
-    // Must enter on opponent's home board
-    // Player 1 enters on points 0-5 (opponent's home)
-    // Player 2 enters on points 18-23 (opponent's home)
-    const entryStart = player === 1 ? 0 : 18;
-    const entryEnd = player === 1 ? 5 : 23;
+    // Both players enter on points 18-23 (opponent's outer board)
+    // Entry point calculation: from point 24 (index 23), move backwards by dice value
+    const entryStart = 18;
+    const entryEnd = 23;
     
     if (to < entryStart || to > entryEnd) return false;
     
@@ -98,9 +98,11 @@ export function isValidMove(
     if (board.bar[player === 1 ? 'player1' : 'player2'] === 0) return false;
     
     // If diceValue provided, check if move matches dice
+    // Entry point: from 24 (index 23) backwards by dice value
     if (diceValue !== undefined) {
-      const entryPoint = player === 1 ? (to + 1) : (24 - to);
-      if (entryPoint !== diceValue) return false;
+      const expectedEntry = 24 - diceValue; // Point number
+      const expectedIndex = expectedEntry - 1; // Convert to index
+      if (to !== expectedIndex) return false;
     }
     
     return true;
@@ -119,18 +121,18 @@ export function isValidMove(
     
     // If diceValue provided, check bearing off rules
     if (diceValue !== undefined) {
-      const pointNumber = player === 1 ? (24 - from) : (from + 1);
+      // Both players: point number = index + 1 (points 1-6, indices 0-5)
+      const pointNumber = from + 1;
       
       // Can bear off if exact match or if no checker on higher points
       if (pointNumber === diceValue) return true;
       
       // Can bear off with higher die if no checkers on higher points
       if (pointNumber < diceValue) {
-        const homeStart = player === 1 ? 18 : 0;
-        const homeEnd = player === 1 ? 23 : 5;
-        for (let i = (player === 1 ? from + 1 : from - 1); 
-             (player === 1 ? i <= homeEnd : i >= homeStart); 
-             (player === 1 ? i++ : i--)) {
+        const homeStart = 0;
+        const homeEnd = 5;
+        // Check if there are checkers on higher points (higher indices = higher point numbers)
+        for (let i = from + 1; i <= homeEnd; i++) {
           if (board.points[i][player - 1] > 0) return false;
         }
         return true;
@@ -147,9 +149,9 @@ export function isValidMove(
   if (from < 0 || from > 23 || to < 0 || to > 23) return false;
   if (board.points[from][player - 1] === 0) return false;
 
-  // Check direction
-  const direction = player === 1 ? -1 : 1;
-  if ((to - from) * direction <= 0) return false; // Wrong direction
+  // Check direction - both players move towards lower indices (towards home board 0-5)
+  // Direction is always decreasing (to < from)
+  if (to >= from) return false; // Wrong direction - must move towards lower indices
 
   // Check if point is open
   const opponent = player === 1 ? 2 : 1;
@@ -157,7 +159,7 @@ export function isValidMove(
 
   // If diceValue provided, check if move matches dice
   if (diceValue !== undefined) {
-    const distance = Math.abs(to - from);
+    const distance = from - to; // Distance is always positive since to < from
     if (distance !== diceValue) return false;
   }
 
@@ -218,13 +220,15 @@ export function canPlayerMove(
   dice: [number, number],
   usedDice: boolean[] = [false, false]
 ): boolean {
-  const homeStart = player === 1 ? 18 : 0;
-  const homeEnd = player === 1 ? 23 : 5;
+  // Both players' home board: indices 0-5
+  const homeStart = 0;
+  const homeEnd = 5;
   
   // Check if player has checkers on bar - must enter first
   if (board.bar[player === 1 ? 'player1' : 'player2'] > 0) {
-    const entryStart = player === 1 ? 0 : 18;
-    const entryEnd = player === 1 ? 5 : 23;
+    // Both players enter on points 18-23 (indices 17-22)
+    const entryStart = 18;
+    const entryEnd = 23;
     
     for (let i = entryStart; i <= entryEnd; i++) {
       if (!usedDice[0] && isValidMove(board, 'bar', i, player, dice[0])) return true;
@@ -237,9 +241,9 @@ export function canPlayerMove(
   for (let i = 0; i < 24; i++) {
     if (board.points[i][player - 1] > 0) {
       // Check moves with first die
+      // Both players move towards lower indices (decreasing)
       if (!usedDice[0]) {
-        const direction = player === 1 ? -1 : 1;
-        const to = i + (dice[0] * direction);
+        const to = i - dice[0]; // Move towards lower indices
         if (to >= 0 && to < 24 && isValidMove(board, i, to, player, dice[0])) {
           return true;
         }
@@ -251,8 +255,7 @@ export function canPlayerMove(
       
       // Check moves with second die
       if (!usedDice[1]) {
-        const direction = player === 1 ? -1 : 1;
-        const to = i + (dice[1] * direction);
+        const to = i - dice[1]; // Move towards lower indices
         if (to >= 0 && to < 24 && isValidMove(board, i, to, player, dice[1])) {
           return true;
         }

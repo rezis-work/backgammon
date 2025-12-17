@@ -9,12 +9,13 @@ const router = express.Router();
 
 const inviteSchema = z.object({
   friend_id: z.string().uuid(),
+  game_type: z.enum(['backgammon', 'dice']).optional().default('backgammon'),
 });
 
 // Send game invite
 router.post('/invite', authenticate, async (req: AuthRequest, res) => {
   try {
-    const { friend_id } = inviteSchema.parse(req.body);
+    const { friend_id, game_type } = inviteSchema.parse(req.body);
 
     if (friend_id === req.userId) {
       return res.status(400).json({ error: 'Cannot invite yourself' });
@@ -56,6 +57,7 @@ router.post('/invite', authenticate, async (req: AuthRequest, res) => {
       .values({
         player1_id: req.userId!,
         player2_id: friend_id,
+        game_type: game_type || 'backgammon',
         status: 'pending',
       })
       .returning();
@@ -78,6 +80,7 @@ router.get('/invites', authenticate, async (req: AuthRequest, res) => {
         id: games.id,
         player1_id: games.player1_id,
         player2_id: games.player2_id,
+        game_type: games.game_type,
         status: games.status,
         created_at: games.created_at,
         player1: {
@@ -109,6 +112,7 @@ router.get('/my-games', authenticate, async (req: AuthRequest, res) => {
         id: games.id,
         player1_id: games.player1_id,
         player2_id: games.player2_id,
+        game_type: games.game_type,
         status: games.status,
         created_at: games.created_at,
         opponent: {
@@ -133,6 +137,7 @@ router.get('/my-games', authenticate, async (req: AuthRequest, res) => {
         id: games.id,
         player1_id: games.player1_id,
         player2_id: games.player2_id,
+        game_type: games.game_type,
         status: games.status,
         created_at: games.created_at,
         opponent: {
@@ -234,6 +239,7 @@ router.get('/:id', authenticate, async (req: AuthRequest, res) => {
         id: games.id,
         player1_id: games.player1_id,
         player2_id: games.player2_id,
+        game_type: games.game_type,
         status: games.status,
         winner_id: games.winner_id,
         points_awarded: games.points_awarded,

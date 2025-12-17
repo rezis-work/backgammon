@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { gamesApi } from '@/lib/api';
 import BackgammonBoard from '@/components/game/BackgammonBoard';
+import DiceGame from '@/components/game/DiceGame';
 import { Card, CardContent } from '@/components/ui/card';
 
 export default function GamePage() {
@@ -65,13 +66,23 @@ export default function GamePage() {
     );
   }
 
+  const gameType = game.game_type || 'backgammon';
+
   return (
     <div className="min-h-screen bg-gray-50 py-6">
-      <BackgammonBoard
-        gameId={game.id}
-        userId={user!.id}
-        playerNumber={playerNumber}
-      />
+      {gameType === 'dice' ? (
+        <DiceGame
+          gameId={game.id}
+          userId={user!.id}
+          playerNumber={playerNumber}
+        />
+      ) : (
+        <BackgammonBoard
+          gameId={game.id}
+          userId={user!.id}
+          playerNumber={playerNumber}
+        />
+      )}
     </div>
   );
 }

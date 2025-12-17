@@ -81,10 +81,10 @@ export default function FriendsPage() {
     }
   };
 
-  const handleInviteToGame = async (friendId: string) => {
+  const handleInviteToGame = async (friendId: string, gameType: 'backgammon' | 'dice' = 'backgammon') => {
     try {
-      const { game } = await gamesApi.invite(friendId);
-      toast.success('Game invite sent! The other player will see it on their profile page.', {
+      const { game } = await gamesApi.invite(friendId, gameType);
+      toast.success(`${gameType === 'dice' ? 'Dice' : 'Backgammon'} game invite sent!`, {
         duration: 4000,
       });
     } catch (error: any) {
@@ -193,9 +193,14 @@ export default function FriendsPage() {
                     <p className="font-medium">{friend.username}</p>
                     <p className="text-sm text-gray-500">{friend.points} points</p>
                   </div>
-                  <Button size="sm" onClick={() => handleInviteToGame(friend.id)}>
-                    Invite to Game
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => handleInviteToGame(friend.id, 'backgammon')}>
+                      Backgammon
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => handleInviteToGame(friend.id, 'dice')}>
+                      Dice
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

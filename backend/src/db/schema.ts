@@ -28,11 +28,13 @@ export const friends = pgTable('friends', {
 });
 
 export const gameStatusEnum = pgEnum('game_status', ['pending', 'active', 'completed']);
+export const gameTypeEnum = pgEnum('game_type', ['backgammon', 'dice']);
 
 export const games = pgTable('games', {
   id: uuid('id').defaultRandom().primaryKey(),
   player1_id: uuid('player1_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   player2_id: uuid('player2_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  game_type: gameTypeEnum('game_type').default('backgammon').notNull(),
   status: gameStatusEnum('status').default('pending').notNull(),
   winner_id: uuid('winner_id').references(() => users.id, { onDelete: 'set null' }),
   points_awarded: integer('points_awarded').default(0).notNull(),
